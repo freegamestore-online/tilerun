@@ -80,3 +80,227 @@ body {
   height: 100%;
   overflow: hidden;
 }
+
+/* ---- Original table art: felt, bone tiles, pips ---- */
+
+:root {
+  --felt: #1f6f5c;
+  --felt-deep: #154d40;
+  --felt-weave: rgba(255, 255, 255, 0.035);
+  --bone: #fbf6e9;
+  --bone-shade: #eadfc4;
+  --bone-edge: #cbbd98;
+  --pip: #1a1a1a;
+  --tap-min: 44px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --felt: #14493d;
+    --felt-deep: #0c3129;
+    --bone: #e6dcc2;
+    --bone-shade: #c9bd9c;
+    --bone-edge: #7d7258;
+  }
+}
+
+.table {
+  background-color: var(--felt);
+  background-image:
+    radial-gradient(ellipse at 50% 35%, rgba(255, 255, 255, 0.1), transparent 70%),
+    repeating-linear-gradient(45deg, var(--felt-weave) 0 2px, transparent 2px 6px),
+    repeating-linear-gradient(-45deg, var(--felt-weave) 0 2px, transparent 2px 6px);
+  border-radius: var(--radius);
+  box-shadow: inset 0 0 0 1px var(--felt-deep), inset 0 0 40px rgba(0, 0, 0, 0.3);
+  padding: 1rem;
+  width: 100%;
+  max-width: 28rem;
+  box-sizing: border-box;
+}
+
+.tile-face {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 8px;
+  background: linear-gradient(160deg, #fffdf6, var(--bone) 55%, var(--bone-shade));
+  border: 2px solid var(--bone-edge);
+  box-shadow:
+    0 2px 0 var(--bone-edge),
+    0 4px 8px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  box-sizing: border-box;
+}
+
+.tile-face.is-selected {
+  border-color: var(--accent);
+}
+
+.tile-face > .tile-divider {
+  height: 1px;
+  background: var(--bone-edge);
+}
+
+.tile-sm {
+  width: 40px;
+}
+
+.tile-lg {
+  width: 56px;
+}
+
+/* Placement glow: plays once when a tile lands on the board. */
+@keyframes tile-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.95), 0 4px 8px rgba(0, 0, 0, 0.28);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(250, 204, 21, 0), 0 4px 8px rgba(0, 0, 0, 0.28);
+  }
+}
+
+.tile-placed {
+  animation: tile-glow 900ms ease-out;
+}
+
+/* Tap targets: every control is at least 44×44 px. */
+.tile-button {
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.tile-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn {
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.btn:focus-visible,
+.tile-button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.player-card {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--ink);
+}
+
+.player-card.is-turn {
+  border-color: var(--accent);
+}
+
+.muted-text {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+/* ---- Win celebration (used by the copied Celebration component) ---- */
+
+.celebration {
+  position: fixed;
+  inset: 0;
+  z-index: 800;
+  pointer-events: none;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: -14px;
+  width: 10px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent);
+  animation-name: confetti-fall;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.confetti-piece:nth-child(4n + 2) {
+  background: var(--success);
+}
+
+.confetti-piece:nth-child(4n + 3) {
+  background: var(--warning);
+}
+
+.confetti-piece:nth-child(4n) {
+  background: var(--error);
+}
+
+@keyframes confetti-fall {
+  to {
+    transform: translate(var(--dx), 110vh) rotate(var(--rot));
+  }
+}
+
+.celebrate-banner {
+  margin-top: 30vh;
+  align-self: flex-start;
+  background: var(--paper);
+  color: var(--ink);
+  border: 2px solid var(--accent);
+  border-radius: 999px;
+  padding: 0.5rem 1.25rem;
+  font-family: "Fraunces", serif;
+  font-weight: 800;
+  font-size: 1.25rem;
+  animation: banner-pop 400ms ease-out;
+}
+
+@keyframes banner-pop {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Reduced motion: keep the end state, drop the movement. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -43,7 +43,7 @@ export default defineConfig({
       manifest: {
         name: "Tilerun",
         short_name: "Tilerun",
-        description: "Tilerun — free forever",
+        description: "Classic double-six dominoes. Play the computer or pass and play with friends, with a daily deal every day. Free forever.",
         start_url: "/",
         display: "standalone",
         background_color: "#0f0f0f",

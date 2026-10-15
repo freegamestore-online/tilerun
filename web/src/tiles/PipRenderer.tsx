@@ -38,7 +38,7 @@ const DOT_STYLE: CSSProperties = {
   height: "100%",
   aspectRatio: "1",
   borderRadius: "50%",
-  background: "var(--ink)",
+  background: "var(--pip)",
   justifySelf: "center",
   alignSelf: "center",
 };

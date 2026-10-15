@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { GameAuth, GameShell, GameTopbar } from "@freegamestore/games";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { GameAuth, GameShell, GameTopbar, useGameSounds } from "@freegamestore/games";
 import {
   drawFromBoneyard,
   getAIMove,
@@ -23,6 +23,7 @@ import {
   saveGame,
   type Opponent,
 } from "./game/save";
+import { Celebration } from "./feel/Celebration";
 import { PipRenderer, type Tile } from "./tiles";
 
 interface RoundResult {
@@ -31,11 +32,27 @@ interface RoundResult {
 }
 
 interface Game {
+  /** Identifies one round, so its win celebration plays once. */
+  id: string;
   state: GameState;
   scores: number[];
   result: RoundResult | null;
   /** UTC date when this is a daily round, otherwise null. */
   daily: string | null;
+}
+
+type Cue = "place" | "draw" | "pass";
+type Sounds = ReturnType<typeof useGameSounds>;
+
+/** Plays the sound for a state change. A round that ends on an AI or a blocked board is a loss cue. */
+function playCue(sounds: Sounds, next: GameState, cue: Cue): void {
+  if (isRoundOver(next)) {
+    if (roundWinner(next) !== 0) sounds.playGameOver();
+  } else if (cue === "place") {
+    sounds.playDrop();
+  } else {
+    sounds.playTick();
+  }
 }
 
 const AI_LEVELS: AILevel[] = ["easy", "normal", "hard"];
@@ -47,6 +64,10 @@ const MODE_TEXT: Record<GameMode, string> = {
   block: "No drawing. Pass when you cannot play.",
 };
 
+function nextGameId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function newGame(mode: GameMode, opponent: Opponent): Game {
   const players =
     opponent.kind === "ai"
@@ -56,6 +77,7 @@ function newGame(mode: GameMode, opponent: Opponent): Game {
         ]
       : Array.from({ length: opponent.count }, (_, i) => ({ name: `Player ${i + 1}`, ai: null }));
   return {
+    id: nextGameId(),
     state: newRound(mode, players),
     scores: players.map(() => 0),
     result: null,
@@ -64,17 +86,17 @@ function newGame(mode: GameMode, opponent: Opponent): Game {
 }
 
 /** Marks the round over and awards points when the state has ended it. */
-function settle(state: GameState, scores: readonly number[], daily: string | null): Game {
-  if (!isRoundOver(state)) return { state, scores: [...scores], result: null, daily };
+function settle(g: Game, state: GameState): Game {
+  if (!isRoundOver(state)) return { ...g, state, result: null };
   const winner = roundWinner(state);
   const points = winner === null ? 0 : scoreRound(state, winner);
-  const nextScores = scores.map((s, i) => (i === winner ? s + points : s));
-  return { state, scores: nextScores, result: { winner, points }, daily };
+  const scores = g.scores.map((s, i) => (i === winner ? s + points : s));
+  return { ...g, state, scores, result: { winner, points } };
 }
 
 /** Applies a new state to the current game, settling the round if it has ended. */
 function advance(g: Game | null, next: GameState): Game | null {
-  return g ? settle(next, g.scores, g.daily) : g;
+  return g ? settle(g, next) : g;
 }
 
 function movesFor(state: GameState): Move[] {
@@ -99,21 +121,54 @@ function restoreSession(): { game: Game; mode: GameMode; opponent: Opponent } | 
   const saved = loadGame();
   if (!saved) return null;
   return {
-    game: { state: saved.state, scores: saved.scores, result: null, daily: saved.daily },
+    game: {
+      id: nextGameId(),
+      state: saved.state,
+      scores: saved.scores,
+      result: null,
+      daily: saved.daily,
+    },
     mode: saved.mode,
     opponent: saved.opponent,
   };
 }
 
+/** A fresh daily game, with the UTC date recorded so it can be saved and submitted. */
+function dailyRoundGame(): Game {
+  return {
+    id: nextGameId(),
+    state: dailyRound(),
+    scores: [0, 0],
+    result: null,
+    daily: dateKey(),
+  };
+}
+
 export default function App() {
+  return (
+    <GameShell topbar={<GameTopbar title="Tilerun" />}>
+      <GameAuth />
+      <Tilerun />
+    </GameShell>
+  );
+}
+
+/** The game itself. It sits inside GameShell so the sound hook sees the platform mute setting. */
+function Tilerun() {
   const [restored] = useState(restoreSession);
   const [mode, setMode] = useState<GameMode>(restored?.mode ?? "draw");
   const [opponent, setOpponent] = useState<Opponent>(restored?.opponent ?? DEFAULT_OPPONENT);
   const [game, setGame] = useState<Game | null>(restored?.game ?? null);
   const [selected, setSelected] = useState<Tile | null>(null);
+  const [celebrated, setCelebrated] = useState<string | null>(null);
+  const sounds = useGameSounds();
 
-  // Applies a state change, settling the round if it has ended.
-  const update = (next: GameState) => setGame((g) => advance(g, next));
+  const onCelebrationDone = useCallback((id: string) => setCelebrated(id), []);
+
+  const update = (next: GameState, cue: Cue) => {
+    playCue(sounds, next, cue);
+    setGame((g) => advance(g, next));
+  };
 
   // Keeps the in-progress round in localStorage. A finished round clears the save.
   useEffect(() => {
@@ -151,37 +206,40 @@ export default function App() {
     const timer = setTimeout(() => {
       const move = getAIMove(state, state.turn, ai);
       let next: GameState;
-      if (move) next = playTile(state, state.turn, move.tile, move.end);
-      else if (canDraw(state)) next = drawFromBoneyard(state, state.turn);
-      else next = pass(state, state.turn);
+      let cue: Cue;
+      if (move) {
+        next = playTile(state, state.turn, move.tile, move.end);
+        cue = "place";
+      } else if (canDraw(state)) {
+        next = drawFromBoneyard(state, state.turn);
+        cue = "draw";
+      } else {
+        next = pass(state, state.turn);
+        cue = "pass";
+      }
+      playCue(sounds, next, cue);
       setGame((g) => advance(g, next));
     }, AI_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [game]);
-
-  const shell = (score: number, body: ReactNode) => (
-    <GameShell topbar={<GameTopbar title="Tilerun" score={score} />}>
-      <GameAuth />
-      <div className="flex flex-col items-center gap-4 p-4">{body}</div>
-    </GameShell>
-  );
+  }, [game, sounds]);
 
   if (!game) {
-    return shell(
-      0,
-      <Setup
-        mode={mode}
-        setMode={setMode}
-        opponent={opponent}
-        setOpponent={setOpponent}
-        dailyDone={isDailyDone()}
-        onStart={() => setGame(newGame(mode, opponent))}
-        onDaily={() => {
-          setMode("draw");
-          setOpponent({ kind: "ai", level: "normal" });
-          setGame(dailyRoundGame());
-        }}
-      />,
+    return (
+      <div className="flex flex-col items-center gap-4 p-4">
+        <Setup
+          mode={mode}
+          setMode={setMode}
+          opponent={opponent}
+          setOpponent={setOpponent}
+          dailyDone={isDailyDone()}
+          onStart={() => setGame(newGame(mode, opponent))}
+          onDaily={() => {
+            setMode("draw");
+            setOpponent({ kind: "ai", level: "normal" });
+            setGame(dailyRoundGame());
+          }}
+        />
+      </div>
     );
   }
 
@@ -194,14 +252,18 @@ export default function App() {
 
   const playMove = (move: Move) => {
     setSelected(null);
-    update(playTile(state, state.turn, move.tile, move.end));
+    update(playTile(state, state.turn, move.tile, move.end), "place");
   };
 
   const onTileClick = (tile: Tile) => {
     const options = moves.filter((m) => sameTile(m.tile, tile));
     if (options.length === 0) return;
-    if (options.length === 1 && options[0]) playMove(options[0]);
-    else setSelected(tile);
+    if (options.length === 1 && options[0]) {
+      playMove(options[0]);
+    } else {
+      sounds.playTick();
+      setSelected(tile);
+    }
   };
 
   const endLabel = (move: Move): string => {
@@ -215,29 +277,26 @@ export default function App() {
       ? null
       : state.players[result.winner]?.name;
 
-  return shell(
-    scores[state.turn] ?? 0,
-    <>
+  const humanWon = result?.winner === 0;
+  const firstName = state.players[0]?.name ?? "You";
+  const winLabel = firstName === "You" ? "You win the round!" : `${firstName} wins the round!`;
+
+  return (
+    <div className="flex flex-col items-center gap-4 p-4">
       {game.daily && <p className="text-sm font-semibold">Daily challenge · {game.daily}</p>}
 
       <div className="flex flex-wrap justify-center gap-3">
         {state.players.map((p, i) => (
           <div
             key={i}
-            className="rounded-lg px-3 py-2 text-sm"
-            style={{
-              border: `1px solid ${i === state.turn && !result ? "var(--accent)" : "var(--line)"}`,
-              color: "var(--ink)",
-            }}
+            className={`player-card${i === state.turn && !result ? " is-turn" : ""}`}
           >
             <strong>{p.name}</strong> · {scores[i] ?? 0} pts · {p.hand.length} tiles
           </div>
         ))}
       </div>
 
-      <p className="text-sm" style={{ color: "var(--muted)" }}>
-        Boneyard: {state.boneyard.length}
-      </p>
+      <p className="muted-text">Boneyard: {state.boneyard.length}</p>
 
       <Board state={state} />
 
@@ -256,26 +315,32 @@ export default function App() {
           </div>
         </div>
       ) : current?.ai ? (
-        <p style={{ color: "var(--muted)" }}>{current.name} is thinking…</p>
+        <p className="muted-text">{current.name} is thinking…</p>
       ) : (
         <div className="flex flex-col items-center gap-3">
           <p className="font-semibold">{current?.name}&rsquo;s turn</p>
           <div className="flex flex-wrap justify-center gap-2">
             {hand.map((tile, i) => (
-              <TileFace
+              <button
                 key={`${tile.a}-${tile.b}-${i}`}
-                tile={tile}
-                size={56}
-                highlighted={!!selected && sameTile(selected, tile)}
+                type="button"
+                className="tile-button"
                 onClick={() => onTileClick(tile)}
                 disabled={moves.every((m) => !sameTile(m.tile, tile))}
-              />
+                aria-label={`Tile ${tile.a}-${tile.b}`}
+              >
+                <TileFace
+                  tile={tile}
+                  size="lg"
+                  selected={!!selected && sameTile(selected, tile)}
+                />
+              </button>
             ))}
           </div>
 
           {selectedMoves.length > 1 && (
             <div className="flex flex-wrap justify-center gap-2">
-              <span className="text-sm" style={{ color: "var(--muted)" }}>Play on:</span>
+              <span className="muted-text">Play on:</span>
               {selectedMoves.map((m) => (
                 <Button key={m.end} onClick={() => playMove(m)}>
                   {endLabel(m)}
@@ -287,21 +352,20 @@ export default function App() {
 
           <div className="flex gap-2">
             {canDraw(state) && (
-              <Button onClick={() => update(drawFromBoneyard(state, state.turn))}>Draw</Button>
+              <Button onClick={() => update(drawFromBoneyard(state, state.turn), "draw")}>Draw</Button>
             )}
             {canPass(state) && (
-              <Button onClick={() => update(pass(state, state.turn))}>Pass</Button>
+              <Button onClick={() => update(pass(state, state.turn), "pass")}>Pass</Button>
             )}
           </div>
         </div>
       )}
-    </>,
-  );
-}
 
-/** A fresh daily game, with the UTC date recorded so it can be saved and submitted. */
-function dailyRoundGame(): Game {
-  return { state: dailyRound(), scores: [0, 0], result: null, daily: dateKey() };
+      {humanWon && celebrated !== game.id && (
+        <Celebration id={game.id} label={winLabel} onDone={onCelebrationDone} />
+      )}
+    </div>
+  );
 }
 
 function Setup({
@@ -337,7 +401,7 @@ function Setup({
         <Button active={mode === "draw"} onClick={() => setMode("draw")}>Draw</Button>
         <Button active={mode === "block"} onClick={() => setMode("block")}>Block</Button>
       </Group>
-      <p className="text-sm" style={{ color: "var(--muted)" }}>{MODE_TEXT[mode]}</p>
+      <p className="muted-text">{MODE_TEXT[mode]}</p>
 
       <Group label="Opponents">
         <Button
@@ -387,13 +451,15 @@ function Setup({
 }
 
 function Board({ state }: { state: GameState }) {
-  if (!state.board) {
-    return <p style={{ color: "var(--muted)" }}>No tiles yet. Open the game with any tile.</p>;
-  }
+  const tiles = state.board?.tiles ?? [];
+  const last = tiles.length - 1;
   return (
-    <div className="flex max-w-full flex-wrap justify-center gap-1">
-      {state.board.tiles.map((tile, i) => (
-        <TileFace key={`${tile.a}-${tile.b}-${i}`} tile={tile} size={40} />
+    <div className="table flex min-h-20 flex-wrap items-center justify-center gap-1">
+      {tiles.length === 0 && (
+        <p className="muted-text">No tiles yet. Open the game with any tile.</p>
+      )}
+      {tiles.map((tile, i) => (
+        <TileFace key={`${tile.a}-${tile.b}-${i}`} tile={tile} size="sm" glow={i === last} />
       ))}
     </div>
   );
@@ -402,48 +468,35 @@ function Board({ state }: { state: GameState }) {
 function TileFace({
   tile,
   size,
-  onClick,
-  disabled,
-  highlighted,
+  glow,
+  selected,
 }: {
   tile: Tile;
-  size: number;
-  onClick?: () => void;
-  disabled?: boolean;
-  highlighted?: boolean;
+  size: "sm" | "lg";
+  glow?: boolean;
+  selected?: boolean;
 }) {
-  const face = (
-    <div
-      className="flex flex-col gap-px rounded-md p-0.5"
-      style={{
-        width: size,
-        background: "var(--paper)",
-        border: `2px solid ${highlighted ? "var(--accent)" : "var(--line-strong)"}`,
-      }}
-    >
+  const classes = [
+    "tile-face",
+    size === "lg" ? "tile-lg" : "tile-sm",
+    selected ? "is-selected" : "",
+    glow ? "tile-placed" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <div className={classes}>
       <PipRenderer pips={tile.a} />
-      <div style={{ height: 1, background: "var(--line-strong)" }} />
+      <div className="tile-divider" />
       <PipRenderer pips={tile.b} />
     </div>
-  );
-  if (!onClick) return face;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={`Tile ${tile.a}-${tile.b}`}
-      className="disabled:opacity-40"
-    >
-      {face}
-    </button>
   );
 }
 
 function Group({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center justify-center gap-2">
-      <span className="text-sm" style={{ color: "var(--muted)" }}>{label}:</span>
+      <span className="muted-text">{label}:</span>
       {children}
     </div>
   );
@@ -465,12 +518,7 @@ function Button({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-40"
-      style={{
-        border: "1px solid var(--line-strong)",
-        background: active ? "var(--accent)" : "var(--paper)",
-        color: active ? "var(--paper)" : "var(--ink)",
-      }}
+      className={`btn${active ? " btn-active" : ""}`}
     >
       {children}
     </button>
