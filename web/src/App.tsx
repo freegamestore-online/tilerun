@@ -13,6 +13,16 @@ import {
   type Move,
 } from "./game/GameEngine";
 import type { AILevel, GameMode, GameState } from "./game/GameState";
+import { dailyRound, dateKey } from "./game/DailyChallenge";
+import { submitDailyScore } from "./game/leaderboard";
+import {
+  clearSave,
+  isDailyDone,
+  loadGame,
+  markDailyDone,
+  saveGame,
+  type Opponent,
+} from "./game/save";
 import { PipRenderer, type Tile } from "./tiles";
 
 interface RoundResult {
@@ -24,12 +34,13 @@ interface Game {
   state: GameState;
   scores: number[];
   result: RoundResult | null;
+  /** UTC date when this is a daily round, otherwise null. */
+  daily: string | null;
 }
-
-type Opponent = { kind: "pass"; count: number } | { kind: "ai"; level: AILevel };
 
 const AI_LEVELS: AILevel[] = ["easy", "normal", "hard"];
 const AI_DELAY_MS = 700;
+const DEFAULT_OPPONENT: Opponent = { kind: "pass", count: 2 };
 
 const MODE_TEXT: Record<GameMode, string> = {
   draw: "Draw dominoes from the boneyard when you cannot play.",
@@ -44,21 +55,26 @@ function newGame(mode: GameMode, opponent: Opponent): Game {
           { name: "AI", ai: opponent.level },
         ]
       : Array.from({ length: opponent.count }, (_, i) => ({ name: `Player ${i + 1}`, ai: null }));
-  return { state: newRound(mode, players), scores: players.map(() => 0), result: null };
+  return {
+    state: newRound(mode, players),
+    scores: players.map(() => 0),
+    result: null,
+    daily: null,
+  };
 }
 
 /** Marks the round over and awards points when the state has ended it. */
-function settle(state: GameState, scores: readonly number[]): Game {
-  if (!isRoundOver(state)) return { state, scores: [...scores], result: null };
+function settle(state: GameState, scores: readonly number[], daily: string | null): Game {
+  if (!isRoundOver(state)) return { state, scores: [...scores], result: null, daily };
   const winner = roundWinner(state);
   const points = winner === null ? 0 : scoreRound(state, winner);
   const nextScores = scores.map((s, i) => (i === winner ? s + points : s));
-  return { state, scores: nextScores, result: { winner, points } };
+  return { state, scores: nextScores, result: { winner, points }, daily };
 }
 
 /** Applies a new state to the current game, settling the round if it has ended. */
 function advance(g: Game | null, next: GameState): Game | null {
-  return g ? settle(next, g.scores) : g;
+  return g ? settle(next, g.scores, g.daily) : g;
 }
 
 function movesFor(state: GameState): Move[] {
@@ -78,13 +94,52 @@ function sameTile(a: Tile, b: Tile): boolean {
   return a.a === b.a && a.b === b.b;
 }
 
+/** Restores a saved round on first render, so a reload picks up where it left off. */
+function restoreSession(): { game: Game; mode: GameMode; opponent: Opponent } | null {
+  const saved = loadGame();
+  if (!saved) return null;
+  return {
+    game: { state: saved.state, scores: saved.scores, result: null, daily: saved.daily },
+    mode: saved.mode,
+    opponent: saved.opponent,
+  };
+}
+
 export default function App() {
-  const [mode, setMode] = useState<GameMode>("draw");
-  const [opponent, setOpponent] = useState<Opponent>({ kind: "pass", count: 2 });
-  const [game, setGame] = useState<Game | null>(null);
+  const [restored] = useState(restoreSession);
+  const [mode, setMode] = useState<GameMode>(restored?.mode ?? "draw");
+  const [opponent, setOpponent] = useState<Opponent>(restored?.opponent ?? DEFAULT_OPPONENT);
+  const [game, setGame] = useState<Game | null>(restored?.game ?? null);
   const [selected, setSelected] = useState<Tile | null>(null);
 
+  // Applies a state change, settling the round if it has ended.
   const update = (next: GameState) => setGame((g) => advance(g, next));
+
+  // Keeps the in-progress round in localStorage. A finished round clears the save.
+  useEffect(() => {
+    if (!game) return;
+    if (game.result) {
+      clearSave();
+      return;
+    }
+    saveGame({
+      version: 1,
+      state: game.state,
+      scores: game.scores,
+      mode,
+      opponent,
+      daily: game.daily,
+    });
+  }, [game, mode, opponent]);
+
+  // When a daily round ends: mark it done, and submit the score if the player won.
+  useEffect(() => {
+    if (!game?.result || !game.daily) return;
+    markDailyDone(game.daily);
+    if (game.result.winner === 0 && game.result.points > 0) {
+      void submitDailyScore(game.result.points, new Date(`${game.daily}T00:00:00Z`));
+    }
+  }, [game?.result, game?.daily]);
 
   // Runs the AI's turn after a short delay.
   useEffect(() => {
@@ -119,7 +174,13 @@ export default function App() {
         setMode={setMode}
         opponent={opponent}
         setOpponent={setOpponent}
+        dailyDone={isDailyDone()}
         onStart={() => setGame(newGame(mode, opponent))}
+        onDaily={() => {
+          setMode("draw");
+          setOpponent({ kind: "ai", level: "normal" });
+          setGame(dailyRoundGame());
+        }}
       />,
     );
   }
@@ -157,6 +218,8 @@ export default function App() {
   return shell(
     scores[state.turn] ?? 0,
     <>
+      {game.daily && <p className="text-sm font-semibold">Daily challenge · {game.daily}</p>}
+
       <div className="flex flex-wrap justify-center gap-3">
         {state.players.map((p, i) => (
           <div
@@ -186,7 +249,9 @@ export default function App() {
               : "The round is tied. No points awarded."}
           </p>
           <div className="flex gap-2">
-            <Button onClick={() => setGame(newGame(mode, opponent))}>New Round</Button>
+            {!game.daily && (
+              <Button onClick={() => setGame(newGame(mode, opponent))}>New Round</Button>
+            )}
             <Button onClick={() => { setGame(null); setSelected(null); }}>Menu</Button>
           </div>
         </div>
@@ -234,24 +299,39 @@ export default function App() {
   );
 }
 
+/** A fresh daily game, with the UTC date recorded so it can be saved and submitted. */
+function dailyRoundGame(): Game {
+  return { state: dailyRound(), scores: [0, 0], result: null, daily: dateKey() };
+}
+
 function Setup({
   mode,
   setMode,
   opponent,
   setOpponent,
+  dailyDone,
   onStart,
+  onDaily,
 }: {
   mode: GameMode;
   setMode: (m: GameMode) => void;
   opponent: Opponent;
   setOpponent: (o: Opponent) => void;
+  dailyDone: boolean;
   onStart: () => void;
+  onDaily: () => void;
 }) {
   return (
     <>
       <h1 className="text-3xl font-bold" style={{ fontFamily: "Fraunces, serif" }}>
         Tilerun
       </h1>
+
+      <Group label="Daily">
+        <Button onClick={onDaily} disabled={dailyDone}>
+          {dailyDone ? "Daily done for today" : "Daily challenge"}
+        </Button>
+      </Group>
 
       <Group label="Game">
         <Button active={mode === "draw"} onClick={() => setMode("draw")}>Draw</Button>
@@ -373,16 +453,19 @@ function Button({
   children,
   onClick,
   active,
+  disabled,
 }: {
   children: ReactNode;
   onClick: () => void;
   active?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="rounded-lg px-4 py-2 text-sm font-semibold"
+      disabled={disabled}
+      className="rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-40"
       style={{
         border: "1px solid var(--line-strong)",
         background: active ? "var(--accent)" : "var(--paper)",
