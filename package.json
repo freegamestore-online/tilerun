@@ -9,6 +9,7 @@
     "build": "pnpm --filter @tilerun/web build",
     "preview": "pnpm --filter @tilerun/web preview",
     "typecheck": "pnpm --filter @tilerun/web exec tsc -b",
+    "lint": "pnpm --filter @tilerun/web lint",
     "test": "pnpm --filter @tilerun/web test"
   }
 }
