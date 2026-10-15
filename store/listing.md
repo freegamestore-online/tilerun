@@ -42,4 +42,4 @@ None. Tilerun asks for no device permissions: no camera, microphone, location, c
 ## Assets
 
 - `web/public/icon-192.png` and `icon-512.png` are the app icons.
-- `store/screenshots/`: phone-width captures (390×844) in light and dark, start and mid-play.
+- Screenshots for the listing are not yet in the repo. Capture them at 390×844 in light and dark before submitting the store page.
